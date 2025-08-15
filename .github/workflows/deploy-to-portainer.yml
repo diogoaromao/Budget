@@ -85,6 +85,13 @@ jobs:
         CONTAINER_NAME="budget-api-staging"
         ENDPOINT_ID="${{ secrets.PORTAINER_ENDPOINT_ID }}"
         
+        # Pull the latest image
+        echo "Pulling Docker image: $IMAGE_NAME"
+        PULL_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/images/create?fromImage=$IMAGE_NAME" \
+          -H "Authorization: Bearer $JWT_TOKEN")
+        
+        echo "Image pull response: $PULL_RESPONSE"
+        
         # Stop and remove existing container if it exists
         echo "Checking for existing staging container..."
         EXISTING_CONTAINER=$(curl -s -X GET "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/json?all=true" \
@@ -166,6 +173,13 @@ jobs:
         IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod"
         CONTAINER_NAME="budget-api-prod"
         ENDPOINT_ID="${{ secrets.PORTAINER_ENDPOINT_ID }}"
+        
+        # Pull the latest image
+        echo "Pulling Docker image: $IMAGE_NAME"
+        PULL_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/images/create?fromImage=$IMAGE_NAME" \
+          -H "Authorization: Bearer $JWT_TOKEN")
+        
+        echo "Image pull response: $PULL_RESPONSE"
         
         # Stop and remove existing container if it exists
         echo "Checking for existing production container..."
