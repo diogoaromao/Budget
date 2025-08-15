@@ -67,42 +67,72 @@ jobs:
     environment: staging
     
     steps:
-    - name: Deploy to Staging Environment
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.LXC_HOST }}
-        username: ${{ secrets.LXC_USERNAME }}
-        key: ${{ secrets.LXC_SSH_KEY }}
-        port: ${{ secrets.LXC_SSH_PORT }}
-        script: |
-          # Set variables for staging
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging"
-          CONTAINER_NAME="budget-api-staging"
-          PORT="5001"
+    - name: Deploy to Staging via Portainer API
+      run: |
+        # Authenticate with Portainer
+        echo "Authenticating with Portainer..."
+        AUTH_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
+          -H "Content-Type: application/json" \
+          -d '{"username":"${{ secrets.PORTAINER_USERNAME }}","password":"${{ secrets.PORTAINER_PASSWORD }}"}')
+        
+        JWT_TOKEN=$(echo $AUTH_RESPONSE | jq -r '.jwt')
+        
+        if [ "$JWT_TOKEN" = "null" ]; then
+          echo "Failed to authenticate with Portainer"
+          exit 1
+        fi
+        
+        echo "Successfully authenticated with Portainer"
+        
+        # Set variables
+        IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging"
+        CONTAINER_NAME="budget-api-staging"
+        ENDPOINT_ID="${{ secrets.PORTAINER_ENDPOINT_ID }}"
+        
+        # Stop and remove existing container if it exists
+        echo "Checking for existing staging container..."
+        EXISTING_CONTAINER=$(curl -s -X GET "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/json?all=true" \
+          -H "Authorization: Bearer $JWT_TOKEN" | jq -r ".[] | select(.Names[] | contains(\"$CONTAINER_NAME\")) | .Id")
+        
+        if [ ! -z "$EXISTING_CONTAINER" ] && [ "$EXISTING_CONTAINER" != "null" ]; then
+          echo "Stopping existing container: $EXISTING_CONTAINER"
+          curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$EXISTING_CONTAINER/stop" \
+            -H "Authorization: Bearer $JWT_TOKEN"
           
-          echo "Deploying to STAGING environment..."
-          
-          # Pull the latest staging image
-          docker pull $IMAGE_NAME
-          
-          # Stop and remove existing staging container if it exists
-          docker stop $CONTAINER_NAME 2>/dev/null || true
-          docker rm $CONTAINER_NAME 2>/dev/null || true
-          
-          # Run the new staging container
-          docker run -d \
-            --name $CONTAINER_NAME \
-            --restart unless-stopped \
-            -p $PORT:8080 \
-            -e ASPNETCORE_ENVIRONMENT=Staging \
-            $IMAGE_NAME
-          
-          # Verify staging deployment
-          sleep 5
-          docker ps | grep $CONTAINER_NAME || exit 1
-          
-          echo "Staging deployment completed successfully!"
-          echo "Staging API available at: http://$(hostname -I | awk '{print $1}'):$PORT"
+          echo "Removing existing container: $EXISTING_CONTAINER"
+          curl -s -X DELETE "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$EXISTING_CONTAINER" \
+            -H "Authorization: Bearer $JWT_TOKEN"
+        fi
+        
+        # Create and start new container
+        echo "Creating new staging container..."
+        CREATE_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/create?name=$CONTAINER_NAME" \
+          -H "Authorization: Bearer $JWT_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "Image": "'$IMAGE_NAME'",
+            "Env": ["ASPNETCORE_ENVIRONMENT=Staging"],
+            "ExposedPorts": {"8080/tcp": {}},
+            "HostConfig": {
+              "PortBindings": {"8080/tcp": [{"HostPort": "5001"}]},
+              "RestartPolicy": {"Name": "unless-stopped"}
+            }
+          }')
+        
+        CONTAINER_ID=$(echo $CREATE_RESPONSE | jq -r '.Id')
+        
+        if [ "$CONTAINER_ID" = "null" ]; then
+          echo "Failed to create container"
+          echo $CREATE_RESPONSE
+          exit 1
+        fi
+        
+        echo "Starting container: $CONTAINER_ID"
+        curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$CONTAINER_ID/start" \
+          -H "Authorization: Bearer $JWT_TOKEN"
+        
+        echo "Staging deployment completed successfully!"
+        echo "Staging API available at: http://portainer-budget.romao.io:5001"
 
   deploy-production:
     needs: [build, deploy-staging]
@@ -119,42 +149,69 @@ jobs:
         echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
         docker push ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod
 
-    - name: Deploy to Production Environment
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.LXC_HOST }}
-        username: ${{ secrets.LXC_USERNAME }}
-        key: ${{ secrets.LXC_SSH_KEY }}
-        port: ${{ secrets.LXC_SSH_PORT }}
-        script: |
-          # Set variables for production
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod"
-          CONTAINER_NAME="budget-api-prod"
-          PORT="5000"
+    - name: Deploy to Production via Portainer API
+      run: |
+        # Authenticate with Portainer
+        echo "Authenticating with Portainer..."
+        AUTH_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
+          -H "Content-Type: application/json" \
+          -d '{"username":"${{ secrets.PORTAINER_USERNAME }}","password":"${{ secrets.PORTAINER_PASSWORD }}"}')
+        
+        JWT_TOKEN=$(echo $AUTH_RESPONSE | jq -r '.jwt')
+        
+        if [ "$JWT_TOKEN" = "null" ]; then
+          echo "Failed to authenticate with Portainer"
+          exit 1
+        fi
+        
+        echo "Successfully authenticated with Portainer"
+        
+        # Set variables
+        IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod"
+        CONTAINER_NAME="budget-api-prod"
+        ENDPOINT_ID="${{ secrets.PORTAINER_ENDPOINT_ID }}"
+        
+        # Stop and remove existing container if it exists
+        echo "Checking for existing production container..."
+        EXISTING_CONTAINER=$(curl -s -X GET "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/json?all=true" \
+          -H "Authorization: Bearer $JWT_TOKEN" | jq -r ".[] | select(.Names[] | contains(\"$CONTAINER_NAME\")) | .Id")
+        
+        if [ ! -z "$EXISTING_CONTAINER" ] && [ "$EXISTING_CONTAINER" != "null" ]; then
+          echo "Stopping existing container: $EXISTING_CONTAINER"
+          curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$EXISTING_CONTAINER/stop" \
+            -H "Authorization: Bearer $JWT_TOKEN"
           
-          echo "Deploying to PRODUCTION environment..."
-          
-          # Pull the latest production image
-          docker pull $IMAGE_NAME
-          
-          # Stop and remove existing production container if it exists
-          docker stop $CONTAINER_NAME 2>/dev/null || true
-          docker rm $CONTAINER_NAME 2>/dev/null || true
-          
-          # Run the new production container
-          docker run -d \
-            --name $CONTAINER_NAME \
-            --restart unless-stopped \
-            -p $PORT:8080 \
-            -e ASPNETCORE_ENVIRONMENT=Production \
-            $IMAGE_NAME
-          
-          # Clean up old images
-          docker image prune -f
-          
-          # Verify production deployment
-          sleep 5
-          docker ps | grep $CONTAINER_NAME || exit 1
-          
-          echo "Production deployment completed successfully!"
-          echo "Production API available at: http://$(hostname -I | awk '{print $1}'):$PORT"
+          echo "Removing existing container: $EXISTING_CONTAINER"
+          curl -s -X DELETE "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$EXISTING_CONTAINER" \
+            -H "Authorization: Bearer $JWT_TOKEN"
+        fi
+        
+        # Create and start new container
+        echo "Creating new production container..."
+        CREATE_RESPONSE=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/create?name=$CONTAINER_NAME" \
+          -H "Authorization: Bearer $JWT_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "Image": "'$IMAGE_NAME'",
+            "Env": ["ASPNETCORE_ENVIRONMENT=Production"],
+            "ExposedPorts": {"8080/tcp": {}},
+            "HostConfig": {
+              "PortBindings": {"8080/tcp": [{"HostPort": "5000"}]},
+              "RestartPolicy": {"Name": "unless-stopped"}
+            }
+          }')
+        
+        CONTAINER_ID=$(echo $CREATE_RESPONSE | jq -r '.Id')
+        
+        if [ "$CONTAINER_ID" = "null" ]; then
+          echo "Failed to create container"
+          echo $CREATE_RESPONSE
+          exit 1
+        fi
+        
+        echo "Starting container: $CONTAINER_ID"
+        curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/endpoints/$ENDPOINT_ID/docker/containers/$CONTAINER_ID/start" \
+          -H "Authorization: Bearer $JWT_TOKEN"
+        
+        echo "Production deployment completed successfully!"
+        echo "Production API available at: http://portainer-budget.romao.io:5000"
