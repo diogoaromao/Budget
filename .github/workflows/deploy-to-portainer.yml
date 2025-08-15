@@ -3,12 +3,8 @@ name: Deploy Budget API to Portainer
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'Budget/src/Budget.Api/**'
   pull_request:
     branches: [ main ]
-    paths:
-      - 'Budget/src/Budget.Api/**'
   workflow_dispatch:
 
 env:
