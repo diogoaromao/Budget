@@ -1,0 +1,160 @@
+name: Deploy Budget API to Portainer
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Budget/src/Budget.Api/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Budget/src/Budget.Api/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: budget-api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=main-
+          type=raw,value=staging,enable=true
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ./Budget
+        file: ./Budget/src/Budget.Api/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - name: Deploy to Staging Environment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.LXC_HOST }}
+        username: ${{ secrets.LXC_USERNAME }}
+        key: ${{ secrets.LXC_SSH_KEY }}
+        port: ${{ secrets.LXC_SSH_PORT }}
+        script: |
+          # Set variables for staging
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging"
+          CONTAINER_NAME="budget-api-staging"
+          PORT="5001"
+          
+          echo "Deploying to STAGING environment..."
+          
+          # Pull the latest staging image
+          docker pull $IMAGE_NAME
+          
+          # Stop and remove existing staging container if it exists
+          docker stop $CONTAINER_NAME 2>/dev/null || true
+          docker rm $CONTAINER_NAME 2>/dev/null || true
+          
+          # Run the new staging container
+          docker run -d \
+            --name $CONTAINER_NAME \
+            --restart unless-stopped \
+            -p $PORT:8080 \
+            -e ASPNETCORE_ENVIRONMENT=Staging \
+            $IMAGE_NAME
+          
+          # Verify staging deployment
+          sleep 5
+          docker ps | grep $CONTAINER_NAME || exit 1
+          
+          echo "Staging deployment completed successfully!"
+          echo "Staging API available at: http://$(hostname -I | awk '{print $1}'):$PORT"
+
+  deploy-production:
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Tag image for production
+      run: |
+        echo "Tagging staging image as production..."
+        docker pull ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging
+        docker tag ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod
+        echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+        docker push ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod
+
+    - name: Deploy to Production Environment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.LXC_HOST }}
+        username: ${{ secrets.LXC_USERNAME }}
+        key: ${{ secrets.LXC_SSH_KEY }}
+        port: ${{ secrets.LXC_SSH_PORT }}
+        script: |
+          # Set variables for production
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:prod"
+          CONTAINER_NAME="budget-api-prod"
+          PORT="5000"
+          
+          echo "Deploying to PRODUCTION environment..."
+          
+          # Pull the latest production image
+          docker pull $IMAGE_NAME
+          
+          # Stop and remove existing production container if it exists
+          docker stop $CONTAINER_NAME 2>/dev/null || true
+          docker rm $CONTAINER_NAME 2>/dev/null || true
+          
+          # Run the new production container
+          docker run -d \
+            --name $CONTAINER_NAME \
+            --restart unless-stopped \
+            -p $PORT:8080 \
+            -e ASPNETCORE_ENVIRONMENT=Production \
+            $IMAGE_NAME
+          
+          # Clean up old images
+          docker image prune -f
+          
+          # Verify production deployment
+          sleep 5
+          docker ps | grep $CONTAINER_NAME || exit 1
+          
+          echo "Production deployment completed successfully!"
+          echo "Production API available at: http://$(hostname -I | awk '{print $1}'):$PORT"
